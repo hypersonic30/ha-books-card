@@ -16,7 +16,7 @@
 // Constants
 // ─────────────────────────────────────────────────────────────────────────
 
-const CARD_VERSION = "0.2.0";
+const CARD_VERSION = "0.2.1";
 const CARD_TAG = "books-card";
 const EDITOR_TAG = "books-card-editor";
 
@@ -1165,7 +1165,6 @@ class BooksCard extends HTMLElement {
         spread: "none",
         allowScriptedContent: false,
       });
-      Object.entries(READER_THEMES).forEach(([name, rules]) => this._rendition.themes.register(name, rules));
       this._applyReaderLook();
       this._rendition.on("relocated", (loc) => this._onReaderRelocated(loc));
       this._rendition.on("keyup", (ev) => {
@@ -1215,7 +1214,12 @@ class BooksCard extends HTMLElement {
 
   _applyReaderLook() {
     if (!this._rendition) return;
-    this._rendition.themes.select(this._readerState.theme);
+    // override() replaces the previous value (and is re-applied to every new section). themes.select()
+    // only stacks one <style> per theme in the page, so the last-registered theme always won and you
+    // could never switch back to an earlier one.
+    const { background, color } = (READER_THEMES[this._readerState.theme] || READER_THEMES.hell).body;
+    this._rendition.themes.override("background", background, true);
+    this._rendition.themes.override("color", color, true);
     this._rendition.themes.fontSize(`${this._readerState.fontSize}%`);
   }
 
