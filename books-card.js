@@ -16,7 +16,7 @@
 // Constants
 // ─────────────────────────────────────────────────────────────────────────
 
-const CARD_VERSION = "0.3.0";
+const CARD_VERSION = "0.3.1";
 const CARD_TAG = "books-card";
 const EDITOR_TAG = "books-card-editor";
 
@@ -138,6 +138,11 @@ function sameSection(a, b) {
   const x = norm(a);
   const y = norm(b);
   return !!x && !!y && (x === y || x.endsWith(`/${y}`) || y.endsWith(`/${x}`));
+}
+
+function fmtDate(iso) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
 function debounce(fn, wait) {
@@ -1044,15 +1049,16 @@ class BooksCard extends HTMLElement {
       actions.push(`<button class="bc-btn block" data-action="openReader" data-id="${item.id}">
         <ha-icon icon="mdi:book-open-page-variant"></ha-icon>${resume ? "Weiterlesen" : "Lesen"}</button>`);
       const cloud = !!this._tolino?.enabled;
+      const sentAt = cloud ? this._tolino.sent?.[item.id]?.at : null;
       const notice = this._tolinoNotice?.id === item.id ? this._tolinoNotice : null;
       actions.push(`<div class="bc-actions-row">
         <button class="bc-btn secondary" data-action="sendToTolino" data-id="${item.id}" ${this._busy.has(`tolino-${item.id}`) ? "disabled" : ""}>
-          <ha-icon icon="${cloud ? "mdi:cloud-upload-outline" : "mdi:export-variant"}"></ha-icon>${this._busy.has(`tolino-${item.id}`) && cloud ? "Wird gesendet…" : "An tolino"}</button>
+          <ha-icon icon="${cloud ? "mdi:cloud-upload-outline" : "mdi:export-variant"}"></ha-icon>${this._busy.has(`tolino-${item.id}`) && cloud ? "Wird gesendet…" : sentAt ? "Erneut an tolino" : "An tolino"}</button>
       </div>
       ${notice
         ? `<div class="bc-toast${notice.error ? " err" : ""}" style="margin:4px 0 0"><ha-icon icon="${notice.error ? "mdi:alert-circle-outline" : cloud ? "mdi:cloud-check-outline" : "mdi:download"}"></ha-icon><span>${esc(notice.text)}</span></div>`
         : cloud
-          ? `<div class="bc-hint">„An tolino“ lädt das Buch in deine tolino Cloud. In der tolino-App dann Menü → Synchronisieren.${this._tolino.reachable === false ? " Die Bridge ist gerade nicht erreichbar." : this._tolino.logged_in === false ? " Die Bridge ist noch nicht bei Thalia angemeldet – sie versucht es beim Senden selbst." : ""}</div>`
+          ? `<div class="bc-hint">${sentAt ? `Schon in deiner tolino Cloud (gesendet am ${esc(fmtDate(sentAt))}). „Erneut“ ersetzt die Kopie dort.` : "„An tolino“ lädt das Buch in deine tolino Cloud. In der tolino-App dann Menü → Synchronisieren."}${this._tolino.reachable === false ? " Die Bridge ist gerade nicht erreichbar." : this._tolino.logged_in === false ? " Die Bridge ist noch nicht bei Thalia angemeldet – sie versucht es beim Senden selbst." : ""}</div>`
           : `<div class="bc-hint">„An tolino“ lädt das Buch herunter bzw. öffnet das Teilen-Menü. In der tolino-App dann auf Hochladen tippen, damit es auf den Reader kommt.</div>`}`);
     }
 
@@ -1106,8 +1112,22 @@ class BooksCard extends HTMLElement {
 
   async _sendToTolinoCloud(id) {
     try {
-      await this._api("POST", "books/tolino", { abs_item_id: id });
-      this._tolinoNotice = { id, text: "In deiner tolino Cloud. Öffne die tolino-App und tippe auf Menü → Synchronisieren." };
+      let res;
+      try {
+        res = await this._api("POST", "books/tolino", { abs_item_id: id });
+      } catch (err) {
+        if (err?.body?.code !== "already_sent") throw err;
+        const when = fmtDate(err.body.sent_at);
+        // Server confirmed the book is still in the cloud: never duplicate silently.
+        const replace = window.confirm(`Dieses Buch ist schon in deiner tolino Cloud${when ? ` (gesendet am ${when})` : ""}.\n\nErsetzen? Die alte Kopie wird dabei gelöscht.`);
+        if (!replace) return;
+        res = await this._api("POST", "books/tolino", { abs_item_id: id, force: true });
+      }
+      if (this._tolino) this._tolino.sent = { ...(this._tolino.sent || {}), [id]: { at: new Date().toISOString() } };
+      this._tolinoNotice = {
+        id,
+        text: `${res?.replaced === false ? "Gesendet, aber die alte Kopie ließ sich nicht löschen (doppelt in der Cloud). " : res?.replaced ? "Ersetzt. " : "In deiner tolino Cloud. "}Öffne die tolino-App und tippe auf Menü → Synchronisieren.`,
+      };
     } catch (err) {
       const code = err?.body?.code;
       const detail = errMessage(err);
