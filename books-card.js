@@ -16,7 +16,7 @@
 // Constants
 // ─────────────────────────────────────────────────────────────────────────
 
-const CARD_VERSION = "0.4.0";
+const CARD_VERSION = "0.4.1";
 const CARD_TAG = "books-card";
 const EDITOR_TAG = "books-card-editor";
 
@@ -870,6 +870,12 @@ class BooksCard extends HTMLElement {
     } else if (dialog.open) {
       dialog.close();
     }
+  }
+
+  // Rebuilding a dialog's markup drops the signed src of every <img data-cover>; load them again.
+  _setDialogHtml(dialog, html) {
+    dialog.innerHTML = html;
+    this._hydrateCovers(dialog);
   }
 
   _renderShell() {
@@ -1732,7 +1738,7 @@ class BooksCard extends HTMLElement {
   _onAction_toggleChapters() {
     this._chaptersOpen = !this._chaptersOpen;
     this._playerDialog._html = null;
-    this._playerDialog.innerHTML = this._renderPlayer();
+    this._setDialogHtml(this._playerDialog, this._renderPlayer());
   }
 
   _onAction_jumpChapter(el) {
@@ -2007,7 +2013,7 @@ class BooksCard extends HTMLElement {
     if (this._busy.has("add")) return;
     this._busy.add("add");
     this._addDialog._html = null;
-    this._addDialog.innerHTML = this._renderAdd();
+    this._setDialogHtml(this._addDialog, this._renderAdd());
     try {
       const res = await this._api("POST", "books/add", { book: this._addBook, media_types: types, search: true });
       const failed = (res.results || []).filter((r) => !r.ok);
@@ -2021,7 +2027,7 @@ class BooksCard extends HTMLElement {
     } finally {
       this._busy.delete("add");
       if (this._addDialog.open) this._addDialog._html = null;
-    this._addDialog.innerHTML = this._renderAdd();
+    this._setDialogHtml(this._addDialog, this._renderAdd());
     }
   }
 
