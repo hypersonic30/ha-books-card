@@ -16,7 +16,7 @@
 // Constants
 // ─────────────────────────────────────────────────────────────────────────
 
-const CARD_VERSION = "0.1.6";
+const CARD_VERSION = "0.2.0";
 const CARD_TAG = "books-card";
 const EDITOR_TAG = "books-card-editor";
 
@@ -105,6 +105,22 @@ function errMessage(err) {
   const body = err.body || {};
   return body.error || body.message || err.message || err.error || `Fehler ${err.status || ""}`.trim();
 }
+
+// tolino-bridge / integration error codes → what the user can do about it
+const TOLINO_ERRORS = {
+  bad_type: "Die tolino Cloud nimmt nur EPUB und PDF an.",
+  no_ebook: "Zu diesem Titel gibt es keine E-Book-Datei.",
+  too_large: "Die Datei ist größer als 100 MB.",
+  captcha: "Thalia hat die Anmeldung der Bridge blockiert (Bot-Schutz). Die Bridge versucht es später automatisch erneut.",
+  login_backoff: "Die Anmeldung bei Thalia ist gerade pausiert, weil der letzte Versuch scheiterte. Bitte später noch einmal versuchen.",
+  rejected: "Thalia hat E-Mail oder Passwort der Bridge abgelehnt.",
+  "2fa": "Thalia verlangt einen Bestätigungscode – das kann die Bridge nicht.",
+  no_credentials: "In der Bridge sind keine Thalia-Zugangsdaten hinterlegt.",
+  no_device: "Im tolino-Konto fehlt das Web-Reader-Gerät. Einmal auf webreader.mytolino.com anmelden.",
+  unreachable: "Die tolino-Bridge ist nicht erreichbar.",
+  bridge_auth: "Die tolino-Bridge hat den Token der Integration abgelehnt.",
+  not_configured: "Die tolino-Bridge ist in der Integration nicht eingerichtet.",
+};
 
 function debounce(fn, wait) {
   let t = null;
@@ -213,6 +229,11 @@ const STYLE = `
     border-radius: var(--bc-radius-sm); font-size: 0.9em; color: var(--primary-text-color);
     background: color-mix(in srgb, var(--success-color, #43a047) 25%, transparent);
     border: 1px solid color-mix(in srgb, var(--success-color, #43a047) 45%, transparent);
+  }
+
+  .bc-toast.err {
+    background: color-mix(in srgb, var(--error-color, #db4437) 20%, transparent);
+    border-color: color-mix(in srgb, var(--error-color, #db4437) 45%, transparent);
   }
 
   /* Segmented nav, large enough for thumbs */
@@ -391,6 +412,8 @@ class BooksCard extends HTMLElement {
     this._progress = {}; // libraryItemId -> mediaProgress
     this._detailItemId = null;
     this._detail = null;
+    this._tolino = null; // bridge status from /api/books/tolino, refreshed when a detail sheet opens
+    this._tolinoCheckedAt = 0;
 
     // Search (Chaptarr)
     this._searchDraft = "";
@@ -950,6 +973,7 @@ class BooksCard extends HTMLElement {
     this._detailItemId = el.dataset.id;
     this._detail = null;
     this._render();
+    this._refreshTolino();
     try {
       this._detail = await this._abs("GET", `items/${this._detailItemId}?expanded=1&include=progress`);
     } catch (err) {
@@ -997,13 +1021,17 @@ class BooksCard extends HTMLElement {
       const resume = progress?.ebookLocation && !progress?.isFinished;
       actions.push(`<button class="bc-btn block" data-action="openReader" data-id="${item.id}">
         <ha-icon icon="mdi:book-open-page-variant"></ha-icon>${resume ? "Weiterlesen" : "Lesen"}</button>`);
+      const cloud = !!this._tolino?.enabled;
+      const notice = this._tolinoNotice?.id === item.id ? this._tolinoNotice : null;
       actions.push(`<div class="bc-actions-row">
         <button class="bc-btn secondary" data-action="sendToTolino" data-id="${item.id}" ${this._busy.has(`tolino-${item.id}`) ? "disabled" : ""}>
-          <ha-icon icon="mdi:export-variant"></ha-icon>An tolino</button>
+          <ha-icon icon="${cloud ? "mdi:cloud-upload-outline" : "mdi:export-variant"}"></ha-icon>${this._busy.has(`tolino-${item.id}`) && cloud ? "Wird gesendet…" : "An tolino"}</button>
       </div>
-      ${this._tolinoNotice?.id === item.id
-        ? `<div class="bc-toast" style="margin:4px 0 0"><ha-icon icon="mdi:download"></ha-icon><span>${esc(this._tolinoNotice.text)}</span></div>`
-        : `<div class="bc-hint">„An tolino“ lädt das Buch herunter bzw. öffnet das Teilen-Menü. In der tolino-App dann auf Hochladen tippen, damit es auf den Reader kommt.</div>`}`);
+      ${notice
+        ? `<div class="bc-toast${notice.error ? " err" : ""}" style="margin:4px 0 0"><ha-icon icon="${notice.error ? "mdi:alert-circle-outline" : cloud ? "mdi:cloud-check-outline" : "mdi:download"}"></ha-icon><span>${esc(notice.text)}</span></div>`
+        : cloud
+          ? `<div class="bc-hint">„An tolino“ lädt das Buch in deine tolino Cloud. In der tolino-App dann Menü → Synchronisieren.${this._tolino.reachable === false ? " Die Bridge ist gerade nicht erreichbar." : this._tolino.logged_in === false ? " Die Bridge ist noch nicht bei Thalia angemeldet – sie versucht es beim Senden selbst." : ""}</div>`
+          : `<div class="bc-hint">„An tolino“ lädt das Buch herunter bzw. öffnet das Teilen-Menü. In der tolino-App dann auf Hochladen tippen, damit es auf den Reader kommt.</div>`}`);
     }
 
     return `<div class="bc-sheet">
@@ -1025,14 +1053,50 @@ class BooksCard extends HTMLElement {
     </div>`;
   }
 
-  // ── "An tolino": iOS share sheet → official tolino app ──────────────
+  // ── "An tolino": tolino Cloud via bridge, or the OS share sheet as fallback ──
+
+  async _refreshTolino() {
+    if (Date.now() - this._tolinoCheckedAt < 60000 && this._tolino) return;
+    this._tolinoCheckedAt = Date.now();
+    try {
+      this._tolino = await this._api("GET", "books/tolino");
+    } catch (_) {
+      this._tolino = null; // older integration without the endpoint → share sheet
+    }
+    if (this._detailItemId) this._render();
+  }
 
   async _onAction_sendToTolino(el) {
     const id = el.dataset.id;
     const key = `tolino-${id}`;
     if (this._busy.has(key)) return;
     this._busy.add(key);
+    this._tolinoNotice = null;
     this._render();
+    try {
+      if (this._tolino?.enabled) await this._sendToTolinoCloud(id);
+      else await this._sendToTolinoShare(id);
+    } finally {
+      this._busy.delete(key);
+      this._render();
+    }
+  }
+
+  async _sendToTolinoCloud(id) {
+    try {
+      await this._api("POST", "books/tolino", { abs_item_id: id });
+      this._tolinoNotice = { id, text: "In deiner tolino Cloud. Öffne die tolino-App und tippe auf Menü → Synchronisieren." };
+    } catch (err) {
+      const code = err?.body?.code;
+      const detail = errMessage(err);
+      this._tolinoNotice = { id, error: true, text: TOLINO_ERRORS[code] || `Senden fehlgeschlagen: ${detail}` };
+      console.error("[books-card] tolino", code, err); // eslint-disable-line no-console
+      this._tolinoCheckedAt = 0; // status may have changed (e.g. login backoff) → recheck next time
+      this._refreshTolino();
+    }
+  }
+
+  async _sendToTolinoShare(id) {
     const item = this._detail;
     const title = item?.media?.metadata?.title || "Buch";
     const fileName = `${title.replace(/[\\/:*?"<>|]+/g, " ").trim().slice(0, 80) || "buch"}.epub`;
@@ -1071,9 +1135,6 @@ class BooksCard extends HTMLElement {
       };
     } catch (err) {
       this._setError(err, "An tolino");
-    } finally {
-      this._busy.delete(key);
-      this._render();
     }
   }
 

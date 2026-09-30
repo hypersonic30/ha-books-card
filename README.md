@@ -22,8 +22,10 @@ Built for the Home Assistant companion app. UI language: German.
   Audiobookshelf every 15 s. Keeps playing in a **mini player** while you browse; lock-screen controls via the
   Media Session API where the platform supports it. Track-number chapter names ("1.1") are shown as
   "Kapitel 3 von 440".
-- **An tolino** — hands the EPUB to the iOS/Android share sheet; pick the tolino app to send it to your reader.
-  Falls back to a normal download on desktop browsers.
+- **An tolino** — with the optional [tolino-bridge](https://github.com/hypersonic30/tolino-bridge) configured in the
+  integration, one tap uploads the EPUB straight into your **tolino Cloud** (works the same on iOS and Android; then
+  tolino app → Menü → Synchronisieren). Failures come with a plain-German reason (e.g. Thalia bot protection, login
+  paused). Without a bridge it falls back to the iOS/Android share sheet (or a normal download on desktop browsers).
 - **Suchen** — searches Chaptarr (titles in the language you search in, Hardcover/Goodreads as fallback) and
   adds a book as eBook, Hörbuch or both — **only that book**, never the author's whole catalogue.
 - **Downloads** — what's downloading, converting (MP3→M4B) or importing, and what is still being searched for.
