@@ -16,7 +16,7 @@
 // Constants
 // ─────────────────────────────────────────────────────────────────────────
 
-const CARD_VERSION = "0.1.2";
+const CARD_VERSION = "0.1.3";
 const CARD_TAG = "books-card";
 const EDITOR_TAG = "books-card-editor";
 
@@ -445,27 +445,46 @@ class BooksCard extends HTMLElement {
     if (this._connected) this._render();
   }
 
+  _eventRoots() {
+    return [this.shadowRoot, this._overlayRoot].filter(Boolean);
+  }
+
   connectedCallback() {
     this._connected = true;
+    clearTimeout(this._overlayCleanupTimer);
     this._ensureSkeleton();
-    this.shadowRoot.addEventListener("click", this._handleClick);
-    this.shadowRoot.addEventListener("input", this._handleInput);
-    this.shadowRoot.addEventListener("change", this._handleChange);
-    this.shadowRoot.addEventListener("submit", this._handleSubmit);
+    if (!this._overlay.isConnected) document.body.appendChild(this._overlay);
+    for (const root of this._eventRoots()) {
+      root.addEventListener("click", this._handleClick);
+      root.addEventListener("input", this._handleInput);
+      root.addEventListener("change", this._handleChange);
+      root.addEventListener("submit", this._handleSubmit);
+    }
     this._render();
-    if (this._hass) this._initialLoad();
+    if (this._hass) {
+      this._initialLoad();
+      this._startPolling();
+    }
   }
 
   disconnectedCallback() {
     this._connected = false;
     clearInterval(this._pollTimer);
     this._pollTimer = null;
-    this.shadowRoot.removeEventListener("click", this._handleClick);
-    this.shadowRoot.removeEventListener("input", this._handleInput);
-    this.shadowRoot.removeEventListener("change", this._handleChange);
-    this.shadowRoot.removeEventListener("submit", this._handleSubmit);
-    // Deliberately keep the <audio> element playing: HA re-attaches cards when
-    // switching dashboards, and an audiobook shouldn't stop because of that.
+    for (const root of this._eventRoots()) {
+      root.removeEventListener("click", this._handleClick);
+      root.removeEventListener("input", this._handleInput);
+      root.removeEventListener("change", this._handleChange);
+      root.removeEventListener("submit", this._handleSubmit);
+    }
+    // A re-insert comes back within the same frame; only a card that is really
+    // gone releases its overlay — and never while an audiobook plays or the
+    // reader/player is open.
+    clearTimeout(this._overlayCleanupTimer);
+    this._overlayCleanupTimer = setTimeout(() => {
+      const busy = (this._audio && !this._audio.paused) || this._readerDialog?.open || this._playerDialog?.open;
+      if (!this._connected && !busy) this._overlay?.remove();
+    }, 30000);
   }
 
   getCardSize() {
@@ -489,6 +508,10 @@ class BooksCard extends HTMLElement {
     this._initialLoaded = true;
     this._loadLibraries();
     this._loadDownloads();
+    this._startPolling();
+  }
+
+  _startPolling() {
     clearInterval(this._pollTimer);
     this._pollTimer = setInterval(() => this._poll(), Math.max(5, this._config.poll_seconds) * 1000);
   }
@@ -642,17 +665,28 @@ class BooksCard extends HTMLElement {
   _ensureSkeleton() {
     if (this._skeletonReady) return;
     this._skeletonReady = true;
-    this.shadowRoot.innerHTML = `
+    this.shadowRoot.innerHTML = `${STYLE}<ha-card><div class="bc-root" id="bc-shell"></div></ha-card>`;
+    this._shellEl = this.shadowRoot.getElementById("bc-shell");
+
+    // Dialogs and <audio> live in an overlay attached to <body>, not inside the
+    // card: HA's dashboard layouts detach and re-insert card elements (resize,
+    // rotation, returning to the iOS app), and a modal <dialog> that is moved
+    // like that silently drops out of the top layer — the reader looked
+    // "closed". The overlay never moves, so reader and player survive it.
+    this._overlay = document.createElement("div");
+    this._overlay.className = "books-card-overlay";
+    const overlayRoot = this._overlay.attachShadow({ mode: "open" });
+    overlayRoot.innerHTML = `
       ${STYLE}
-      <ha-card><div class="bc-root" id="bc-shell"></div></ha-card>
       <dialog class="bc-dialog" id="bc-detail"></dialog>
       <dialog class="bc-dialog" id="bc-add"></dialog>
       <dialog class="bc-dialog" id="bc-reader"></dialog>
       <dialog class="bc-dialog" id="bc-player"></dialog>
       <audio id="bc-audio" preload="metadata" playsinline></audio>
     `;
-    const $ = (id) => this.shadowRoot.getElementById(id);
-    this._shellEl = $("bc-shell");
+    this._overlayRoot = overlayRoot;
+    document.body.appendChild(this._overlay);
+    const $ = (id) => overlayRoot.getElementById(id);
     this._detailDialog = $("bc-detail");
     this._addDialog = $("bc-add");
     this._readerDialog = $("bc-reader");
@@ -707,6 +741,7 @@ class BooksCard extends HTMLElement {
     this._syncDialog(this._addDialog, this._addBook, () => this._renderAdd());
     this._syncDialog(this._playerDialog, this._playerOpen && this._player, () => this._renderPlayer(), true);
     this._hydrateCovers(root);
+    if (this._overlayRoot) this._hydrateCovers(this._overlayRoot);
 
     if (focusId) {
       const el = root.querySelector(`[data-focus-id="${focusId}"]`);
@@ -1031,6 +1066,7 @@ class BooksCard extends HTMLElement {
     this._readerItem = this._detail && this._detail.id === id ? this._detail : { id, media: { metadata: {} } };
     this._detailDialog.close();
     this._readerState = { ...this._readerState, loading: true, percent: 0, menu: false, error: null };
+    this._readerMoved = false;
     this._readerDialog.innerHTML = this._renderReaderFrame();
     this._readerDialog.showModal();
     try {
@@ -1054,8 +1090,8 @@ class BooksCard extends HTMLElement {
       this._applyReaderLook();
       this._rendition.on("relocated", (loc) => this._onReaderRelocated(loc));
       this._rendition.on("keyup", (ev) => {
-        if (ev.key === "ArrowRight") this._rendition?.next();
-        if (ev.key === "ArrowLeft") this._rendition?.prev();
+        if (ev.key === "ArrowRight") this._turnPage(1);
+        if (ev.key === "ArrowLeft") this._turnPage(-1);
       });
       this._wireReaderSwipe();
       await this._rendition.display(progress?.ebookLocation || undefined);
@@ -1092,8 +1128,7 @@ class BooksCard extends HTMLElement {
       const dx = t.screenX - startX;
       const dy = t.screenY - startY;
       if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
-        if (dx < 0) this._rendition?.next();
-        else this._rendition?.prev();
+        this._turnPage(dx < 0 ? 1 : -1);
       }
       startX = null;
     });
@@ -1111,17 +1146,29 @@ class BooksCard extends HTMLElement {
     // Once the locations index exists, derive the book-wide position from it;
     // epub.js' own start.percentage can lag behind or be section-relative.
     const locations = this._readerBook?.locations;
-    const pct = locations?.length() ? locations.percentageFromCfi(start.cfi) : start.percentage || 0;
-    this._readerState.percent = pct || 0;
+    const pct = locations?.length() ? locations.percentageFromCfi(start.cfi) : null;
+    if (pct !== null) this._readerState.percent = pct;
     this._readerState.chapter = start.href;
     this._patchReaderChrome();
-    this._saveReaderProgress(start.cfi, pct || 0);
+    // Only a real page turn moves the saved position — merely opening a book
+    // (or the locations index finishing) must never overwrite it.
+    if (this._readerMoved) this._saveReaderProgress(start.cfi, pct);
+  }
+
+  _turnPage(direction) {
+    if (!this._rendition) return;
+    this._readerMoved = true;
+    if (direction > 0) this._rendition.next();
+    else this._rendition.prev();
   }
 
   async _persistReaderProgress(cfi, pct) {
     const id = this._readerItem?.id;
     if (!id || !cfi) return;
-    const body = { ebookLocation: cfi, ebookProgress: pct };
+    // pct is null while the locations index is still being built: keep the
+    // stored percentage then instead of resetting it to 0.
+    const body = { ebookLocation: cfi };
+    if (typeof pct === "number") body.ebookProgress = pct;
     if (pct >= 0.995) body.isFinished = true;
     try {
       await this._abs("PATCH", `me/progress/${id}`, body);
@@ -1183,11 +1230,11 @@ class BooksCard extends HTMLElement {
   }
 
   _onAction_readerNext() {
-    this._rendition?.next();
+    this._turnPage(1);
   }
 
   _onAction_readerPrev() {
-    this._rendition?.prev();
+    this._turnPage(-1);
   }
 
   _onAction_toggleReaderMenu() {
@@ -1211,7 +1258,11 @@ class BooksCard extends HTMLElement {
 
   _closeReader() {
     const loc = this._rendition?.currentLocation?.();
-    if (loc?.start?.cfi) this._saveReaderProgress.flush(loc.start.cfi, this._readerState.percent || 0);
+    if (this._readerMoved && loc?.start?.cfi) {
+      const locations = this._readerBook?.locations;
+      const pct = locations?.length() ? locations.percentageFromCfi(loc.start.cfi) : null;
+      this._saveReaderProgress.flush(loc.start.cfi, pct);
+    }
     try {
       this._rendition?.destroy();
       this._readerBook?.destroy();
