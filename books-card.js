@@ -16,7 +16,7 @@
 // Constants
 // ─────────────────────────────────────────────────────────────────────────
 
-const CARD_VERSION = "0.1.4";
+const CARD_VERSION = "0.1.5";
 const CARD_TAG = "books-card";
 const EDITOR_TAG = "books-card-editor";
 
@@ -1049,13 +1049,19 @@ class BooksCard extends HTMLElement {
           return;
         }
       }
-      // No Web Share with files (desktop browsers): plain download instead.
+      // No Web Share with files (Android companion app, desktop browsers):
+      // download instead — exactly like Home Assistant's own fileDownload()
+      // helper (target=_blank + dispatched click), which the Android app hands
+      // to its download manager.
       const a = document.createElement("a");
-      a.href = signed;
+      a.target = "_blank";
+      a.href = new URL(signed, location.origin).href;
       a.download = fileName;
+      a.style.display = "none";
       document.body.appendChild(a);
-      a.click();
-      a.remove();
+      a.dispatchEvent(new MouseEvent("click"));
+      document.body.removeChild(a);
+      this._showToast("Download gestartet – danach die Datei mit der tolino-App öffnen.");
     } catch (err) {
       this._setError(err, "An tolino");
     } finally {
