@@ -16,7 +16,7 @@
 // Constants
 // ─────────────────────────────────────────────────────────────────────────
 
-const CARD_VERSION = "0.1.1";
+const CARD_VERSION = "0.1.2";
 const CARD_TAG = "books-card";
 const EDITOR_TAG = "books-card-editor";
 
@@ -1665,9 +1665,13 @@ class BooksCard extends HTMLElement {
         })
         .join("")}</div>`;
     } else {
-      body = `<div class="bc-empty">Such nach einem Buch – als eBook, Hörbuch oder beides.</div>`;
+      body = `<div class="bc-empty">Such nach einem Buch – als eBook, Hörbuch oder beides.<br>
+        Tipp: Mit dem deutschen Titel findest du die deutschen Ausgaben (z. B. „Harry Potter Stein der Weisen“).</div>`;
     }
-    return `${form}${this._searchNotice ? `<div class="bc-hint">${esc(this._searchNotice)}</div>` : ""}${body}`;
+    const langHint = this._searchResults?.length
+      ? `<div class="bc-hint">Titel werden so angezeigt, wie sie gefunden wurden – geholt wird immer die deutsche Ausgabe.</div>`
+      : "";
+    return `${form}${this._searchNotice ? `<div class="bc-hint">${esc(this._searchNotice)}</div>` : ""}${langHint}${body}`;
   }
 
   _onAction_openAdd(el) {
@@ -1701,7 +1705,7 @@ class BooksCard extends HTMLElement {
           ${option(["ebook"], "mdi:book-open-variant", "Als eBook holen", st.ebook)}
           ${option(["audiobook"], "mdi:headphones", "Als Hörbuch holen", st.audiobook)}
           ${!st.ebook && !st.audiobook ? option(["ebook", "audiobook"], "mdi:book-plus-multiple", "Beides holen") : ""}
-          <div class="bc-hint">Es wird nur dieses eine Buch geholt – keine weiteren Bücher des Autors. Den Fortschritt siehst du unter „Downloads“.</div>
+          <div class="bc-hint">Es wird nur dieses eine Buch geholt – in der deutschen Ausgabe, keine weiteren Bücher des Autors. Den Fortschritt siehst du unter „Downloads“.</div>
         </div>
         ${b.overview ? `<div class="bc-desc">${esc(b.overview.replace(/<[^>]+>/g, " "))}</div>` : ""}
       </div>
