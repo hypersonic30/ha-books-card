@@ -16,7 +16,7 @@
 // Constants
 // ─────────────────────────────────────────────────────────────────────────
 
-const CARD_VERSION = "0.3.3";
+const CARD_VERSION = "0.4.0";
 const CARD_TAG = "books-card";
 const EDITOR_TAG = "books-card-editor";
 
@@ -185,7 +185,9 @@ function chaptarrCover(book) {
   // Prefer the provider's original URL: Chaptarr's /MediaCoverProxy paths sit
   // behind its web-UI login and refuse API-key access.
   const img = (book.images || []).find((i) => i.coverType === "cover") || (book.images || [])[0];
-  const candidates = [img?.remoteUrl, book.remoteCover, img?.url].filter(Boolean);
+  // Hardcover results: book.images only points at the proxy, the real URL sits on the edition.
+  const editionUrls = (book.editions || []).map((e) => ((e.images || []).find((i) => i.coverType === "cover") || (e.images || [])[0])?.url);
+  const candidates = [img?.remoteUrl, book.remoteCover, ...editionUrls, img?.url].filter(Boolean);
   return candidates.find((u) => /^https?:\/\//.test(u)) || candidates[0] || "";
 }
 
@@ -200,6 +202,40 @@ function chaptarrCoverImg(book, lazy = true) {
 
 function authorOf(book) {
   return book?.author?.authorName || book?.authorTitle || "";
+}
+
+const normKey = (value) =>
+  String(value || "").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+
+// Same book from both sources: Goodreads calls it "Nevernight (The Nevernight Chronicle, #1)", Hardcover "Nevernight".
+function bookKey(book) {
+  const title = String(book?.title || "").replace(/\s*\([^()]*#\s*\d+[^()]*\)\s*$/, "");
+  return `${normKey(title)}|${normKey(authorOf(book))}`;
+}
+
+/**
+ * Chaptarr's book/lookup (Goodreads) and search (Hardcover) each return only a partial list, and different ones
+ * (Hazelwood: 5 vs 10 books, 6 titles only in search). Show the union, lookup's version first (German editions).
+ * search also carries series and author entries - neither contains books, so they become "search for this" chips.
+ */
+function mergeSearch(lookupBooks, searchItems) {
+  const seen = new Set();
+  const books = [];
+  for (const book of [...lookupBooks, ...searchItems.filter((i) => i.book).map((i) => i.book)]) {
+    if (!book?.title) continue;
+    const key = bookKey(book);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    books.push({ book });
+  }
+  const uniq = (list) => {
+    const out = new Map();
+    for (const entry of list) if (entry.label && !out.has(normKey(entry.label))) out.set(normKey(entry.label), entry);
+    return [...out.values()];
+  };
+  const series = uniq(searchItems.filter((i) => i.series?.title).map((i) => ({ label: i.series.title, count: i.series.workCount })));
+  const authors = uniq(searchItems.filter((i) => i.author?.authorName && !i.book).map((i) => ({ label: i.author.authorName })));
+  return { books, series, authors };
 }
 
 function queueProgress(item) {
@@ -260,6 +296,9 @@ const STYLE = `
     background: color-mix(in srgb, var(--error-color, #db4437) 20%, transparent);
     border-color: color-mix(in srgb, var(--error-color, #db4437) 45%, transparent);
   }
+
+  .bc-chip { border: none; cursor: pointer; font: inherit; font-size: 0.85em; }
+  .bc-chip ha-icon { --mdc-icon-size: 16px; margin-right: 4px; }
 
   /* Segmented nav, large enough for thumbs */
   .bc-nav { display: flex; gap: 4px; margin: 8px 16px 0; padding: 4px; border-radius: 999px;
@@ -448,6 +487,8 @@ class BooksCard extends HTMLElement {
     this._searchDraft = "";
     this._searchQuery = "";
     this._searchResults = null;
+    this._searchSeries = [];
+    this._searchAuthors = [];
     this._searchLoading = false;
     this._searchNotice = null;
     this._addBook = null;
@@ -1824,33 +1865,34 @@ class BooksCard extends HTMLElement {
     this._searchLoading = true;
     this._searchNotice = null;
     this._searchResults = null;
+    this._searchSeries = [];
+    this._searchAuthors = [];
     this._render();
-    // book/lookup answers with titles in the language of the query (German
-    // search → German editions); /search via Hardcover is the fallback.
-    let results = null;
-    try {
-      const lookup = await this._chaptarr("GET", `book/lookup${qs({ term: q })}`);
-      if (Array.isArray(lookup) && lookup.length) results = lookup.map((book) => ({ book }));
-    } catch (_) {
-      /* fall through to /search */
-    }
-    if (!results) {
+    // Both sources in parallel (see mergeSearch): lookup has the German editions, search has more titles.
+    const [lk, sr] = await Promise.allSettled([
+      this._chaptarr("GET", `book/lookup${qs({ term: q })}`),
+      this._chaptarr("GET", `search${qs({ term: q, provider: "hardcover" })}`),
+    ]);
+    const lookupBooks = lk.status === "fulfilled" && Array.isArray(lk.value) ? lk.value.map((x) => x.book || x) : [];
+    let searchItems = sr.status === "fulfilled" && Array.isArray(sr.value) ? sr.value : null;
+    if (searchItems === null && !lookupBooks.length) {
+      // Hardcover needs a token in Chaptarr and expires yearly.
       try {
-        results = await this._chaptarr("GET", `search${qs({ term: q, provider: "hardcover" })}`);
-      } catch (err) {
-        // Hardcover needs a token in Chaptarr and expires yearly.
-        try {
-          results = await this._chaptarr("GET", `search${qs({ term: q, provider: "goodreads" })}`);
-          this._searchNotice = "Hardcover-Suche nicht verfügbar – Ergebnisse von Goodreads.";
-        } catch (err2) {
-          this._searchLoading = false;
-          this._setError(err2, "Suche");
-          return;
-        }
+        searchItems = await this._chaptarr("GET", `search${qs({ term: q, provider: "goodreads" })}`);
+        this._searchNotice = "Hardcover-Suche nicht verfügbar – Ergebnisse von Goodreads.";
+      } catch (err2) {
+        this._searchLoading = false;
+        this._setError(err2, "Suche");
+        return;
       }
+    } else if (searchItems === null) {
+      this._searchNotice = "Hardcover-Suche nicht verfügbar – nur ein Teil der Treffer.";
     }
+    const merged = mergeSearch(lookupBooks, searchItems || []);
     if (q !== this._searchQuery) return; // a newer search replaced this one
-    this._searchResults = (results || []).filter((r) => r.book);
+    this._searchSeries = merged.series;
+    this._searchAuthors = merged.authors.filter((a) => normKey(a.label) !== normKey(q));
+    this._searchResults = merged.books;
     this._searchLoading = false;
     this._render();
   }
@@ -1875,7 +1917,7 @@ class BooksCard extends HTMLElement {
     </form>`;
     let body = "";
     if (this._searchLoading) body = `<div class="bc-loading">Suche läuft…</div>`;
-    else if (this._searchResults && !this._searchResults.length) body = `<div class="bc-empty">Nichts gefunden. Anders schreiben oder nur den Autor suchen?</div>`;
+    else if (this._searchResults && !this._searchResults.length && !this._searchSeries.length && !this._searchAuthors.length) body = `<div class="bc-empty">Nichts gefunden. Anders schreiben oder nur den Autor suchen?</div>`;
     else if (this._searchResults) {
       body = `<div class="bc-list">${this._searchResults
         .map((r, i) => {
@@ -1895,7 +1937,7 @@ class BooksCard extends HTMLElement {
             <ha-icon icon="mdi:chevron-right"></ha-icon>
           </div>`;
         })
-        .join("")}</div>`;
+        .join("")}</div>${this._renderSearchChips()}`;
     } else {
       body = `<div class="bc-empty">Such nach einem Buch – als eBook, Hörbuch oder beides.<br>
         Tipp: Mit dem deutschen Titel findest du die deutschen Ausgaben (z. B. „Harry Potter Stein der Weisen“).</div>`;
@@ -1904,6 +1946,22 @@ class BooksCard extends HTMLElement {
       ? `<div class="bc-hint">Titel werden so angezeigt, wie sie gefunden wurden – geholt wird immer die deutsche Ausgabe.</div>`
       : "";
     return `${form}${this._searchNotice ? `<div class="bc-hint">${esc(this._searchNotice)}</div>` : ""}${langHint}${body}`;
+  }
+
+  _renderSearchChips() {
+    const chips = (title, list, icon) =>
+      list.length
+        ? `<div class="bc-hint" style="margin:14px 0 6px;font-weight:600">${title}</div>
+           <div class="bc-pills">${list
+             .map((e) => `<button type="button" class="bc-pill info bc-chip" data-action="searchFor" data-q="${esc(e.label)}"><ha-icon icon="${icon}"></ha-icon>${esc(e.label)}${e.count > 1 ? ` · ${e.count}` : ""}</button>`)
+             .join("")}</div>`
+        : "";
+    return chips("Serien", this._searchSeries || [], "mdi:bookshelf") + chips("Autoren", this._searchAuthors || [], "mdi:account-outline");
+  }
+
+  _onAction_searchFor(el) {
+    this._searchDraft = el.dataset.q || "";
+    this._onSubmit_search();
   }
 
   _onAction_openAdd(el) {

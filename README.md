@@ -26,8 +26,10 @@ Built for the Home Assistant companion app. UI language: German.
   integration, one tap uploads the EPUB straight into your **tolino Cloud** (works the same on iOS and Android; then
   tolino app → Menü → Synchronisieren). Failures come with a plain-German reason (e.g. Thalia bot protection, login
   paused). Without a bridge it falls back to the iOS/Android share sheet (or a normal download on desktop browsers).
-- **Suchen** — searches Chaptarr (titles in the language you search in, Hardcover/Goodreads as fallback) and
-  adds a book as eBook, Hörbuch or both — **only that book**, never the author's whole catalogue.
+- **Suchen** — searches Chaptarr with **both** of its sources at once (Goodreads `book/lookup`: German editions; Hardcover `search`:
+  more titles) and shows the union without duplicates — e.g. 11 instead of 5 books for "Ali Hazelwood". Series and authors found
+  along the way appear as chips; tapping one starts a new search. Adds a book as eBook, Hörbuch or both — **only that book**,
+  never the author's whole catalogue. If one source is down, the other still answers (with a note).
 - **Downloads** — what's downloading, converting (MP3→M4B) or importing, and what is still being searched for.
   Imports that the integration repairs automatically show as "Wird zugeordnet…".
 
