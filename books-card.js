@@ -16,7 +16,7 @@
 // Constants
 // ─────────────────────────────────────────────────────────────────────────
 
-const CARD_VERSION = "0.3.1";
+const CARD_VERSION = "0.3.2";
 const CARD_TAG = "books-card";
 const EDITOR_TAG = "books-card-editor";
 
@@ -108,7 +108,9 @@ function errMessage(err) {
 
 // tolino-bridge / integration error codes → what the user can do about it
 const TOLINO_ERRORS = {
-  bad_type: "Die tolino Cloud nimmt nur EPUB und PDF an.",
+  bad_type: "Die tolino Cloud nimmt nur EPUB und PDF an (MOBI/AZW3 wandelt die Bridge um, dieses Format nicht).",
+  no_converter: "Dieses Buch ist kein EPUB. Die Bridge hat keine Umwandlung (Calibre), deshalb lässt es sich nicht senden.",
+  convert_failed: "Die Umwandlung nach EPUB ist fehlgeschlagen (bei Kindle-Büchern oft wegen Kopierschutz/DRM).",
   no_ebook: "Zu diesem Titel gibt es keine E-Book-Datei.",
   too_large: "Die Datei ist größer als 100 MB.",
   captcha: "Thalia hat die Anmeldung der Bridge blockiert (Bot-Schutz). Die Bridge versucht es später automatisch erneut.",
