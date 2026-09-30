@@ -16,7 +16,7 @@
 // Constants
 // ─────────────────────────────────────────────────────────────────────────
 
-const CARD_VERSION = "0.1.5";
+const CARD_VERSION = "0.1.6";
 const CARD_TAG = "books-card";
 const EDITOR_TAG = "books-card-editor";
 
@@ -701,6 +701,7 @@ class BooksCard extends HTMLElement {
     this._wireDialog(this._detailDialog, () => {
       this._detailItemId = null;
       this._detail = null;
+      this._tolinoNotice = null;
     });
     this._wireDialog(this._addDialog, () => {
       this._addBook = null;
@@ -1000,7 +1001,9 @@ class BooksCard extends HTMLElement {
         <button class="bc-btn secondary" data-action="sendToTolino" data-id="${item.id}" ${this._busy.has(`tolino-${item.id}`) ? "disabled" : ""}>
           <ha-icon icon="mdi:export-variant"></ha-icon>An tolino</button>
       </div>
-      <div class="bc-hint">„An tolino“ öffnet das Teilen-Menü – dort „tolino“ wählen. Die tolino-App schickt das Buch dann auf den Reader.</div>`);
+      ${this._tolinoNotice?.id === item.id
+        ? `<div class="bc-toast" style="margin:4px 0 0"><ha-icon icon="mdi:download"></ha-icon><span>${esc(this._tolinoNotice.text)}</span></div>`
+        : `<div class="bc-hint">„An tolino“ lädt das Buch herunter bzw. öffnet das Teilen-Menü. In der tolino-App dann auf Hochladen tippen, damit es auf den Reader kommt.</div>`}`);
     }
 
     return `<div class="bc-sheet">
@@ -1061,7 +1064,11 @@ class BooksCard extends HTMLElement {
       document.body.appendChild(a);
       a.dispatchEvent(new MouseEvent("click"));
       document.body.removeChild(a);
-      this._showToast("Download gestartet – danach die Datei mit der tolino-App öffnen.");
+      // Shown inside the open detail sheet — a card toast would sit behind it.
+      this._tolinoNotice = {
+        id,
+        text: "Download gestartet. Öffne die Datei danach unter „Downloads“ mit der tolino-App und tippe dort auf Hochladen.",
+      };
     } catch (err) {
       this._setError(err, "An tolino");
     } finally {
