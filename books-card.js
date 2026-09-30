@@ -16,7 +16,7 @@
 // Constants
 // ─────────────────────────────────────────────────────────────────────────
 
-const CARD_VERSION = "0.2.1";
+const CARD_VERSION = "0.3.0";
 const CARD_TAG = "books-card";
 const EDITOR_TAG = "books-card-editor";
 
@@ -121,6 +121,24 @@ const TOLINO_ERRORS = {
   bridge_auth: "Die tolino-Bridge hat den Token der Integration abgelehnt.",
   not_configured: "Die tolino-Bridge ist in der Integration nicht eingerichtet.",
 };
+
+// epub.js navigation tree → flat list with depth, for the reader's chapter list
+function flattenToc(items, depth = 0, out = []) {
+  for (const item of items || []) {
+    const label = String(item.label || "").replace(/\s+/g, " ").trim();
+    if (label && item.href) out.push({ label, href: item.href, depth: Math.min(depth, 3) });
+    flattenToc(item.subitems, depth + 1, out);
+  }
+  return out;
+}
+
+// toc hrefs are relative to the nav document, the reader's location href to the package root
+function sameSection(a, b) {
+  const norm = (h) => String(h || "").split("#")[0].replace(/^\.?\//, "");
+  const x = norm(a);
+  const y = norm(b);
+  return !!x && !!y && (x === y || x.endsWith(`/${y}`) || y.endsWith(`/${x}`));
+}
 
 function debounce(fn, wait) {
   let t = null;
@@ -355,6 +373,10 @@ const STYLE = `
   .bc-reader-title { flex: 1; min-width: 0; font-weight: 600; font-size: 0.9em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .bc-reader-view { position: relative; flex: 1; min-height: 0; }
   .bc-reader-view > .bc-epub { position: absolute; inset: 0; }
+  .bc-reader-toc { position: absolute; inset: 0; z-index: 5; overflow-y: auto; padding: 10px 12px 16px;
+    display: flex; flex-direction: column; gap: 4px; background: var(--card-background-color, #1c1c1e); }
+  .bc-toc-item { padding: 11px 12px; border-radius: var(--bc-radius-sm); cursor: pointer; font-size: 0.92em; background: var(--bc-soft); }
+  .bc-toc-item.current { background: color-mix(in srgb, var(--bc-accent) 22%, transparent); font-weight: 600; }
   .bc-tapzone { position: absolute; top: 0; bottom: 0; width: 22%; z-index: 2; }
   .bc-tapzone.left { left: 0; } .bc-tapzone.right { right: 0; }
   .bc-reader-foot { display: flex; align-items: center; gap: 10px; padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
@@ -1144,7 +1166,7 @@ class BooksCard extends HTMLElement {
     const id = el.dataset.id;
     this._readerItem = this._detail && this._detail.id === id ? this._detail : { id, media: { metadata: {} } };
     this._detailDialog.close();
-    this._readerState = { ...this._readerState, loading: true, percent: 0, menu: false, error: null };
+    this._readerState = { ...this._readerState, loading: true, percent: 0, menu: false, error: null, toc: [], tocOpen: false, chapter: null };
     this._readerMoved = false;
     this._readerDialog.innerHTML = this._renderReaderFrame();
     this._readerDialog.showModal();
@@ -1157,6 +1179,12 @@ class BooksCard extends HTMLElement {
       const buffer = await resp.arrayBuffer();
       const progress = this._progress[id];
       this._readerBook = window.ePub(buffer);
+      this._readerBook.loaded.navigation
+        .then((nav) => {
+          this._readerState.toc = flattenToc(nav?.toc);
+          this._patchReaderChrome();
+        })
+        .catch(() => {}); // no/broken table of contents → the chapter button just stays hidden
       const container = this._readerDialog.querySelector(".bc-epub");
       this._rendition = this._readerBook.renderTo(container, {
         width: "100%",
@@ -1268,6 +1296,7 @@ class BooksCard extends HTMLElement {
         <div class="bc-reader-bar">
           <button class="bc-btn secondary round" data-action="closeReader" aria-label="Schließen"><ha-icon icon="mdi:close"></ha-icon></button>
           <div class="bc-reader-title">${esc(m.title || "")}</div>
+          <button class="bc-btn secondary round" id="bc-reader-toc-btn" data-action="toggleReaderToc" aria-label="Kapitel" hidden><ha-icon icon="mdi:format-list-bulleted"></ha-icon></button>
           <button class="bc-btn secondary round" data-action="toggleReaderMenu" aria-label="Darstellung"><ha-icon icon="mdi:format-size"></ha-icon></button>
         </div>
         <div class="bc-reader-menu" id="bc-reader-menu" hidden>
@@ -1279,6 +1308,7 @@ class BooksCard extends HTMLElement {
         </div>
         <div class="bc-reader-view">
           <div class="bc-epub"></div>
+          <div class="bc-reader-toc" id="bc-reader-toc" hidden></div>
           <div class="bc-tapzone left" data-action="readerPrev"></div>
           <div class="bc-tapzone right" data-action="readerNext"></div>
           <div class="bc-loading" id="bc-reader-status" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:3">Buch wird geöffnet…</div>
@@ -1310,6 +1340,26 @@ class BooksCard extends HTMLElement {
     if (meter) meter.style.width = `${pct}%`;
     const menu = d.querySelector("#bc-reader-menu");
     if (menu) menu.hidden = !this._readerState.menu;
+    const toc = this._readerState.toc || [];
+    const tocBtn = d.querySelector("#bc-reader-toc-btn");
+    if (tocBtn) tocBtn.hidden = toc.length < 2;
+    const panel = d.querySelector("#bc-reader-toc");
+    if (panel) {
+      panel.hidden = !this._readerState.tocOpen || toc.length < 2;
+      if (!panel.hidden) {
+        let current = -1;
+        toc.forEach((c, i) => {
+          if (sameSection(c.href, this._readerState.chapter)) current = i;
+        });
+        panel.innerHTML = toc
+          .map(
+            (c, i) => `<div class="bc-toc-item${i === current ? " current" : ""}" data-action="readerGoto" data-index="${i}" style="padding-left:${12 + c.depth * 16}px">${esc(c.label)}</div>`
+          )
+          .join("");
+        // Open on the current chapter instead of the top of a long list.
+        panel.querySelector(".current")?.scrollIntoView({ block: "center" });
+      }
+    }
   }
 
   _onAction_readerNext() {
@@ -1322,7 +1372,27 @@ class BooksCard extends HTMLElement {
 
   _onAction_toggleReaderMenu() {
     this._readerState.menu = !this._readerState.menu;
+    this._readerState.tocOpen = false;
     this._patchReaderChrome();
+  }
+
+  _onAction_toggleReaderToc() {
+    this._readerState.tocOpen = !this._readerState.tocOpen;
+    this._readerState.menu = false;
+    this._patchReaderChrome();
+  }
+
+  async _onAction_readerGoto(el) {
+    const target = this._readerState.toc?.[Number(el.dataset.index)];
+    if (!target || !this._rendition) return;
+    this._readerState.tocOpen = false;
+    this._patchReaderChrome();
+    this._readerMoved = true; // a real navigation: the new position is worth saving
+    try {
+      await this._rendition.display(target.href);
+    } catch (err) {
+      console.error("[books-card] chapter jump", target.href, err); // eslint-disable-line no-console
+    }
   }
 
   _onAction_readerFont(el) {
