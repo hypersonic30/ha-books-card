@@ -16,7 +16,7 @@
 // Constants
 // ─────────────────────────────────────────────────────────────────────────
 
-const CARD_VERSION = "0.1.3";
+const CARD_VERSION = "0.1.4";
 const CARD_TAG = "books-card";
 const EDITOR_TAG = "books-card-editor";
 
@@ -326,6 +326,8 @@ const STYLE = `
 
   /* Full-screen reader & player */
   .bc-full { width: 100vw; height: 100dvh; max-height: 100dvh; border-radius: 0; }
+  /* Full-screen sheets: keep the close button clear of the status bar / notch. */
+  .bc-full .bc-sheet-close { top: calc(10px + env(safe-area-inset-top)); right: calc(10px + env(safe-area-inset-right)); }
   .bc-reader { display: flex; flex-direction: column; height: 100%; }
   .bc-reader-bar { display: flex; align-items: center; gap: 8px; padding: calc(8px + env(safe-area-inset-top)) 10px 8px;
     background: color-mix(in srgb, var(--card-background-color, #1c1c1e) 96%, transparent); border-bottom: 1px solid var(--bc-line); }
@@ -340,7 +342,10 @@ const STYLE = `
   .bc-reader-foot .bc-meter { flex: 1; }
   .bc-reader-menu { display: flex; gap: 8px; flex-wrap: wrap; padding: 10px 12px; border-bottom: 1px solid var(--bc-line); }
 
-  .bc-player { display: flex; flex-direction: column; align-items: center; gap: 16px; padding: calc(24px + env(safe-area-inset-top)) 22px calc(24px + env(safe-area-inset-bottom)); height: 100%; overflow-y: auto; }
+  .bc-player { display: flex; flex-direction: column; align-items: center; gap: 16px; padding: calc(64px + env(safe-area-inset-top)) 22px calc(24px + env(safe-area-inset-bottom)); height: 100%; overflow-y: auto; }
+  /* Never let the flex column squash the cover when the chapter list opens. */
+  .bc-player > * { flex-shrink: 0; }
+  .bc-player.chapters-open .bc-cover { width: min(40vw, 160px); }
   .bc-player .bc-cover { width: min(70vw, 300px); aspect-ratio: 1 / 1; border-radius: var(--bc-radius-md); box-shadow: 0 20px 40px rgba(0,0,0,0.45); }
   .bc-player-title { text-align: center; font-size: 1.15em; font-weight: 700; }
   .bc-player-sub { text-align: center; color: var(--secondary-text-color); font-size: 0.88em; margin-top: -10px; }
@@ -1398,6 +1403,7 @@ class BooksCard extends HTMLElement {
 
   _onPlayState() {
     this._lastTick = null;
+    this._patchPlayer(true);
     if ("mediaSession" in navigator) navigator.mediaSession.playbackState = this._audio.paused ? "paused" : "playing";
     this._render();
   }
@@ -1577,7 +1583,7 @@ class BooksCard extends HTMLElement {
       : "";
     return `<div class="bc-sheet bc-full">
       <button class="bc-btn secondary round bc-sheet-close" data-action="closePlayer" aria-label="Minimieren"><ha-icon icon="mdi:chevron-down"></ha-icon></button>
-      <div class="bc-player">
+      <div class="bc-player ${this._chaptersOpen ? "chapters-open" : ""}">
         ${this._coverHtml(p.item.id, { title: m.title, square: true })}
         <div class="bc-player-title">${esc(m.title || p.session.displayTitle || "")}</div>
         <div class="bc-player-sub">${esc(p.session.displayAuthor || m.authorName || "")}</div>
