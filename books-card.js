@@ -16,7 +16,7 @@
 // Constants
 // ─────────────────────────────────────────────────────────────────────────
 
-const CARD_VERSION = "0.3.2";
+const CARD_VERSION = "0.3.3";
 const CARD_TAG = "books-card";
 const EDITOR_TAG = "books-card-editor";
 
@@ -1025,6 +1025,9 @@ class BooksCard extends HTMLElement {
     const m = media.metadata || {};
     const isAudio = (media.tracks || []).length > 0 || media.duration > 0;
     const hasEbook = !!media.ebookFile;
+    // The in-card reader (epub.js) only opens EPUB; MOBI/AZW3 (Chaptarr's fallback formats) can still go to tolino.
+    const ebookFormat = String(media.ebookFile?.ebookFormat || media.ebookFormat || "epub").toLowerCase();
+    const readable = ebookFormat === "epub";
     const progress = this._progress[item.id] || item.userMediaProgress;
     const series = (m.series || []).map((s) => `${s.name}${s.sequence ? ` #${s.sequence}` : ""}`).join(", ");
     const narrators = (m.narrators || []).join(", ");
@@ -1048,8 +1051,10 @@ class BooksCard extends HTMLElement {
     }
     if (hasEbook) {
       const resume = progress?.ebookLocation && !progress?.isFinished;
-      actions.push(`<button class="bc-btn block" data-action="openReader" data-id="${item.id}">
-        <ha-icon icon="mdi:book-open-page-variant"></ha-icon>${resume ? "Weiterlesen" : "Lesen"}</button>`);
+      actions.push(readable
+        ? `<button class="bc-btn block" data-action="openReader" data-id="${item.id}">
+        <ha-icon icon="mdi:book-open-page-variant"></ha-icon>${resume ? "Weiterlesen" : "Lesen"}</button>`
+        : `<div class="bc-hint" style="margin:0 0 8px">Dieses Buch liegt als ${esc(ebookFormat.toUpperCase())} vor und lässt sich hier nicht lesen. Über „An tolino“ kommt es als EPUB auf den Reader${this._tolino?.enabled ? " (wird dabei umgewandelt)" : ""}.</div>`);
       const cloud = !!this._tolino?.enabled;
       const sentAt = cloud ? this._tolino.sent?.[item.id]?.at : null;
       const notice = this._tolinoNotice?.id === item.id ? this._tolinoNotice : null;
