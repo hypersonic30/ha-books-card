@@ -16,7 +16,7 @@
 // Constants
 // ─────────────────────────────────────────────────────────────────────────
 
-const CARD_VERSION = "0.1.0";
+const CARD_VERSION = "0.1.1";
 const CARD_TAG = "books-card";
 const EDITOR_TAG = "books-card-editor";
 
@@ -26,6 +26,9 @@ const DEFAULT_CONFIG = {
   show_search: true,
   show_downloads: true,
   poll_seconds: 10,
+  // Order of the Audiobookshelf library chips; the first one opens by default.
+  // Matched case-insensitively against library names; unlisted libraries follow.
+  library_order: "eBooks, Hörbücher, Hörspiele",
 };
 
 const TABS = [
@@ -428,7 +431,13 @@ class BooksCard extends HTMLElement {
 
   setConfig(config) {
     if (!config) throw new Error("Invalid configuration");
+    const orderChanged = this._config.library_order !== config.library_order;
     this._config = { ...DEFAULT_CONFIG, ...config };
+    if (orderChanged && this._libraries.length) {
+      this._libraries = this._sortLibraries(this._libraries);
+      this._libraryId = this._libraries[0]?.id || null;
+      this._loadLibraryItems(this._libraryId);
+    }
     if (!this._visibleTabs().find((t) => t.key === this._activeTab)) {
       this._activeTab = this._config.default_tab;
       if (!this._visibleTabs().find((t) => t.key === this._activeTab)) this._activeTab = "library";
@@ -772,13 +781,25 @@ class BooksCard extends HTMLElement {
   async _loadLibraries() {
     try {
       const data = await this._abs("GET", "libraries");
-      this._libraries = (data.libraries || []).filter((l) => l.mediaType === "book");
+      this._libraries = this._sortLibraries((data.libraries || []).filter((l) => l.mediaType === "book"));
       if (!this._libraries.find((l) => l.id === this._libraryId)) this._libraryId = this._libraries[0]?.id || null;
       this._render();
       await Promise.all([this._loadLibraryItems(this._libraryId), this._loadProgress()]);
     } catch (err) {
       this._setError(err, "Audiobookshelf");
     }
+  }
+
+  _sortLibraries(libraries) {
+    const order = String(this._config.library_order || "")
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+    const rank = (lib) => {
+      const i = order.indexOf((lib.name || "").trim().toLowerCase());
+      return i === -1 ? order.length + (lib.displayOrder || 0) / 1000 : i;
+    };
+    return [...libraries].sort((a, b) => rank(a) - rank(b));
   }
 
   async _loadProgress() {
@@ -1826,6 +1847,7 @@ const EDITOR_SCHEMA = [
   },
   { name: "show_search", selector: { boolean: {} } },
   { name: "show_downloads", selector: { boolean: {} } },
+  { name: "library_order", selector: { text: {} } },
   { name: "poll_seconds", selector: { number: { min: 5, max: 120, mode: "box", unit_of_measurement: "s" } } },
 ];
 
@@ -1834,6 +1856,7 @@ const EDITOR_LABELS = {
   default_tab: "Start-Tab",
   show_search: "Tab „Suchen“ anzeigen",
   show_downloads: "Tab „Downloads“ anzeigen",
+  library_order: "Reihenfolge der Bibliotheken (mit Komma, erste = Standard)",
   poll_seconds: "Aktualisierung (Sekunden)",
 };
 

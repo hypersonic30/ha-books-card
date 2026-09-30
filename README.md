@@ -49,6 +49,7 @@ default_tab: library   # library | search | downloads
 show_search: true      # hide the Search tab (e.g. for a kids' dashboard)
 show_downloads: true
 poll_seconds: 10       # refresh interval for downloads
+library_order: "eBooks, Hörbücher, Hörspiele"  # chip order; the first opens by default
 ```
 
 All options are also available in the visual card editor. Tip: use a **panel** view on phones so the card gets
