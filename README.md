@@ -66,3 +66,14 @@ the full screen width.
   supported yet.
 - epub.js and JSZip are loaded from jsDelivr the first time the reader opens.
 - Covers and audio are loaded through Home Assistant signed URLs (valid 24 h).
+
+## Development
+
+`books-card.js` is a single file (no build step). Browser tests live in `tests/browser/`: real Chrome (Playwright) against the card
+with a stubbed `hass` object, no Home Assistant needed:
+
+```bash
+pip install playwright && playwright install chrome
+python tests/browser/run_all.py          # or a single script, e.g. python tests/browser/search.py
+```
+CI runs the same (`.github/workflows/validate.yml`).

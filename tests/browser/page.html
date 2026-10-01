@@ -1,0 +1,37 @@
+<!doctype html><html><head><meta charset="utf-8"></head><body style="margin:0;background:#fff">
+<script>
+  customElements.define("ha-icon", class extends HTMLElement { connectedCallback(){ this.textContent = this.getAttribute("icon") || ""; } });
+  window.calls = [];
+  window.scenario = { tolino: { enabled: true, reachable: true, logged_in: true }, post: { ok: true } };
+  const mkItem = () => ({ id: "abc123", mediaType: "book", media: { metadata: { title: "Testbuch", authors: [] }, ebookFile: { ebookFormat: (window.scenario && window.scenario.ebookFormat) || "epub" } }, userMediaProgress: null });
+  window.hassStub = {
+    connection: {},
+    callWS: async (msg) => ({ path: (msg.path || "") + "?authSig=stub" }),
+    callApi: async (method, path, body) => {
+      window.calls.push({ method, path, body });
+      if (path === "books/tolino" && method === "GET") {
+        if (window.scenario.tolino === "404") throw { status: 404, body: { message: "404: Not Found" } };
+        return window.scenario.tolino;
+      }
+      if (path === "books/tolino" && method === "POST") {
+        const r = window.scenario.postQueue && window.scenario.postQueue.length ? window.scenario.postQueue.shift() : window.scenario.post;
+        if (r.ok) return { ok: true, filename: "x.epub", deliverableId: "d1", replaced: r.replaced };
+        throw { status: r.status, body: { error: r.error, code: r.code, sent_at: r.sent_at } };
+      }
+      if (path.startsWith("books/chaptarr/book/lookup")) {
+        const r = window.scenario.lookup; if (r === "error") throw { status: 500, body: { error: "lookup boom" } }; return r || [];
+      }
+      if (path.startsWith("books/chaptarr/search")) {
+        const goodreads = path.includes("provider=goodreads");
+        const r = goodreads ? window.scenario.goodreads : window.scenario.search;
+        if (r === "error" || (goodreads && r === undefined && window.scenario.search === "error" && window.scenario.goodreadsError)) throw { status: 503, body: { error: "search boom" } };
+        return r || [];
+      }
+      if (path.startsWith("books/abs/items/abc123")) return mkItem();
+      if (path.includes("libraries")) return { libraries: [] };
+      return {};
+    },
+  };
+</script>
+<script src="/books-card.js" charset="utf-8"></script>
+</body></html>

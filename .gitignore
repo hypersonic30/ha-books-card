@@ -1,3 +1,5 @@
 .DS_Store
 # Never commit push credentials
 .git-token-*
+tests/browser/current.epub
+__pycache__/

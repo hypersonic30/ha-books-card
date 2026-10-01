@@ -16,7 +16,7 @@
 // Constants
 // ─────────────────────────────────────────────────────────────────────────
 
-const CARD_VERSION = "0.4.1";
+const CARD_VERSION = "0.5.0";
 const CARD_TAG = "books-card";
 const EDITOR_TAG = "books-card-editor";
 
@@ -146,6 +146,9 @@ function fmtDate(iso) {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
+
+// Problems with the bridge / Thalia (not with the book): sending won't work right now, so offer the file instead.
+const TOLINO_BRIDGE_PROBLEMS = new Set(["unreachable", "captcha", "login_backoff", "rejected", "2fa", "no_credentials", "no_device", "bridge_auth"]);
 
 function debounce(fn, wait) {
   let t = null;
@@ -1110,7 +1113,7 @@ class BooksCard extends HTMLElement {
           <ha-icon icon="${cloud ? "mdi:cloud-upload-outline" : "mdi:export-variant"}"></ha-icon>${this._busy.has(`tolino-${item.id}`) && cloud ? "Wird gesendet…" : sentAt ? "Erneut an tolino" : "An tolino"}</button>
       </div>
       ${notice
-        ? `<div class="bc-toast${notice.error ? " err" : ""}" style="margin:4px 0 0"><ha-icon icon="${notice.error ? "mdi:alert-circle-outline" : cloud ? "mdi:cloud-check-outline" : "mdi:download"}"></ha-icon><span>${esc(notice.text)}</span></div>`
+        ? `<div class="bc-toast${notice.error ? " err" : ""}" style="margin:4px 0 0"><ha-icon icon="${notice.error ? "mdi:alert-circle-outline" : cloud ? "mdi:cloud-check-outline" : "mdi:download"}"></ha-icon><span>${esc(notice.text)}</span></div>${notice.fallback ? `<button class="bc-btn secondary" style="margin-top:6px" data-action="sendToTolinoFile" data-id="${item.id}"><ha-icon icon="mdi:download"></ha-icon>Stattdessen als Datei laden</button>` : ""}`
         : cloud
           ? `<div class="bc-hint">${sentAt ? `Schon in deiner tolino Cloud (gesendet am ${esc(fmtDate(sentAt))}). „Erneut“ ersetzt die Kopie dort.` : "„An tolino“ lädt das Buch in deine tolino Cloud. In der tolino-App dann Menü → Synchronisieren."}${this._tolino.reachable === false ? " Die Bridge ist gerade nicht erreichbar." : this._tolino.logged_in === false ? " Die Bridge ist noch nicht bei Thalia angemeldet – sie versucht es beim Senden selbst." : ""}</div>`
           : `<div class="bc-hint">„An tolino“ lädt das Buch herunter bzw. öffnet das Teilen-Menü. In der tolino-App dann auf Hochladen tippen, damit es auf den Reader kommt.</div>`}`);
@@ -1164,6 +1167,22 @@ class BooksCard extends HTMLElement {
     }
   }
 
+  // Escape hatch when the bridge is down: hand the EPUB over directly (share sheet / download) like before the bridge existed.
+  async _onAction_sendToTolinoFile(el) {
+    const id = el.dataset.id;
+    const key = `tolino-${id}`;
+    if (this._busy.has(key)) return;
+    this._busy.add(key);
+    this._tolinoNotice = null;
+    this._render();
+    try {
+      await this._sendToTolinoShare(id);
+    } finally {
+      this._busy.delete(key);
+      this._render();
+    }
+  }
+
   async _sendToTolinoCloud(id) {
     try {
       let res;
@@ -1185,7 +1204,7 @@ class BooksCard extends HTMLElement {
     } catch (err) {
       const code = err?.body?.code;
       const detail = errMessage(err);
-      this._tolinoNotice = { id, error: true, text: TOLINO_ERRORS[code] || `Senden fehlgeschlagen: ${detail}` };
+      this._tolinoNotice = { id, error: true, fallback: TOLINO_BRIDGE_PROBLEMS.has(code), text: TOLINO_ERRORS[code] || `Senden fehlgeschlagen: ${detail}` };
       console.error("[books-card] tolino", code, err); // eslint-disable-line no-console
       this._tolinoCheckedAt = 0; // status may have changed (e.g. login backoff) → recheck next time
       this._refreshTolino();
