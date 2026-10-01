@@ -61,9 +61,9 @@ the full screen width.
 
 ## Notes
 
-- The Audiobookshelf token configured in the integration belongs to one Audiobookshelf user, so everyone using
-  the card shares that user's reading/listening progress. Separate progress per Home Assistant user is not
-  supported yet.
+- By default everybody using the card shares the one Audiobookshelf user configured in the integration, and so its reading/listening
+  progress. For **separate progress per person**, add people in the integration (Books Integration ≥ 0.10.0: *Add person* with their own
+  Audiobookshelf token). The tolino button then only shows for people who have a tolino, each with their own Thalia account.
 - epub.js and JSZip are loaded from jsDelivr the first time the reader opens.
 - Covers and audio are loaded through Home Assistant signed URLs (valid 24 h).
 
