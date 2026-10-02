@@ -16,7 +16,7 @@
 // Constants
 // ─────────────────────────────────────────────────────────────────────────
 
-const CARD_VERSION = "0.7.0";
+const CARD_VERSION = "0.8.0";
 const CARD_TAG = "books-card";
 const EDITOR_TAG = "books-card-editor";
 
@@ -502,6 +502,8 @@ class BooksCard extends HTMLElement {
     this._libraryFilter = "";
     this._inProgress = [];
     this._progress = {}; // libraryItemId -> mediaProgress
+    this._canTag = false; // from /api/books/people: people who are not locked may release books for others
+    this._sharedTag = "für alle"; // the "for everybody" tag
     this._restricted = false; // child protection: search, requests and downloads are closed server-side for this person
     this._people = []; // [{name, tag, me}] from /api/books/people; chips per person show when there are two or more
     this._personFilter = storedGet(PERSON_KEY) || "all"; // all | mine | <tag of one person>
@@ -969,6 +971,8 @@ class BooksCard extends HTMLElement {
     try {
       const body = await this._api("GET", "books/people");
       this._people = body.people || [];
+      this._canTag = !!body.can_tag;
+      if (body.shared_tag) this._sharedTag = body.shared_tag;
       if (body.restricted) this._setRestricted(true);
     } catch (_) {
       this._people = []; // older integration without the endpoint → no person chips
@@ -979,6 +983,41 @@ class BooksCard extends HTMLElement {
   // One library for everybody; a book "für Anna" carries that tag. Books without any person tag (the old stock) are for everybody.
   _personTags() {
     return new Set(this._people.map((p) => p.tag));
+  }
+
+  // "Für wen?": release a book for a person or for everybody (the tags a limited Audiobookshelf user is allowed to see).
+  _renderTagBlock(item) {
+    if (!this._canTag || !this._people.length) return "";
+    const have = new Set(item.media?.tags || []);
+    const chip = (tag, label) =>
+      `<button class="bc-chip ${have.has(tag) ? "active" : ""}" data-action="toggleTag" data-id="${esc(item.id)}" data-tag="${esc(tag)}" ${
+        this._busy.has(`tag-${item.id}-${tag}`) ? "disabled" : ""}>${esc(label)}</button>`;
+    return `<div class="bc-section-title" style="margin-top:14px">Für wen?</div>
+      <div class="bc-chips bc-tagchips">${this._people.map((p) => chip(p.tag, p.name)).join("")}${chip(this._sharedTag, "Alle")}</div>
+      <div class="bc-hint">Gesperrte Personen sehen nur Bücher mit ihrem Namen oder „Alle“.</div>`;
+  }
+
+  async _onAction_toggleTag(el) {
+    const { id, tag } = el.dataset;
+    const key = `tag-${id}-${tag}`;
+    if (this._busy.has(key) || !this._detail || this._detail.id !== id) return;
+    const on = !(this._detail.media?.tags || []).includes(tag);
+    this._busy.add(key);
+    this._render();
+    try {
+      const res = await this._api("POST", "books/tags", { item_id: id, tag, tagged: on });
+      const relevant = new Set([...this._people.map((p) => p.tag), this._sharedTag]);
+      const merge = (media) => {
+        if (media) media.tags = [...(media.tags || []).filter((t) => !relevant.has(t)), ...(res.tags || [])];
+      };
+      merge(this._detail.media);
+      for (const list of Object.values(this._libraryItems)) list.filter((i) => i.id === id).forEach((i) => merge(i.media));
+    } catch (err) {
+      this._setError(err, "Freigabe");
+    } finally {
+      this._busy.delete(key);
+      this._render();
+    }
   }
 
   _byPerson(items) {
@@ -1210,6 +1249,7 @@ class BooksCard extends HTMLElement {
         </div>
         <div class="bc-pills" style="position:relative;z-index:1;margin-top:12px">${facts}</div>
         <div class="bc-actions">${actions.join("") || `<div class="bc-empty">Keine lesbare oder hörbare Datei gefunden.</div>`}</div>
+        ${this._renderTagBlock(item)}
         ${m.description ? `<div class="bc-desc">${esc(m.description.replace(/<[^>]+>/g, " "))}</div>` : ""}
       </div>
     </div>`;
