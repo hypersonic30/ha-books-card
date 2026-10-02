@@ -16,7 +16,7 @@
 // Constants
 // ─────────────────────────────────────────────────────────────────────────
 
-const CARD_VERSION = "0.6.0";
+const CARD_VERSION = "0.7.0";
 const CARD_TAG = "books-card";
 const EDITOR_TAG = "books-card-editor";
 
@@ -502,6 +502,7 @@ class BooksCard extends HTMLElement {
     this._libraryFilter = "";
     this._inProgress = [];
     this._progress = {}; // libraryItemId -> mediaProgress
+    this._restricted = false; // child protection: search, requests and downloads are closed server-side for this person
     this._people = []; // [{name, tag, me}] from /api/books/people; chips per person show when there are two or more
     this._personFilter = storedGet(PERSON_KEY) || "all"; // all | mine | <tag of one person>
     this._detailItemId = null;
@@ -624,7 +625,14 @@ class BooksCard extends HTMLElement {
   }
 
   _visibleTabs() {
-    return TABS.filter((t) => !t.configKey || this._config[t.configKey]);
+    return TABS.filter((t) => (!t.configKey || this._config[t.configKey]) && !(this._restricted && t.key !== "library"));
+  }
+
+  _setRestricted(value) {
+    if (this._restricted === value) return;
+    this._restricted = value;
+    if (value && this._activeTab !== "library") this._activeTab = "library";
+    this._render();
   }
 
   _initialLoad() {
@@ -645,7 +653,7 @@ class BooksCard extends HTMLElement {
     if (document.hidden) return;
     // Downloads are cheap and are what people watch while waiting; the
     // library refreshes less often and only while it's visible.
-    this._loadDownloads(true);
+    if (!this._restricted) this._loadDownloads(true);
     this._pollCount = (this._pollCount || 0) + 1;
     if (this._activeTab === "library" && this._pollCount % 6 === 0) this._loadLibraryItems(this._libraryId, true);
   }
@@ -959,7 +967,9 @@ class BooksCard extends HTMLElement {
 
   async _loadPeople() {
     try {
-      this._people = (await this._api("GET", "books/people")).people || [];
+      const body = await this._api("GET", "books/people");
+      this._people = body.people || [];
+      if (body.restricted) this._setRestricted(true);
     } catch (_) {
       this._people = []; // older integration without the endpoint → no person chips
     }
@@ -2137,7 +2147,8 @@ class BooksCard extends HTMLElement {
       }
       if (!quiet || this._activeTab === "downloads" || this._queue.length !== before) this._render();
     } catch (err) {
-      if (!quiet) this._setError(err, "Downloads");
+      if (err?.body?.code === "restricted") this._setRestricted(true); // closed for this person: no error banner, no more polling
+      else if (!quiet) this._setError(err, "Downloads");
     }
   }
 
