@@ -15,7 +15,8 @@ Built for the Home Assistant companion app. UI language: German.
 ## Features
 
 - **Bibliothek** — all Audiobookshelf libraries as chips (e.g. Hörbücher / Hörspiele / eBooks), cover grid,
-  filter, and a *Weiter* row with everything in progress.
+  filter, and a *Weiter* row with everything in progress. With two or more people (integration ≥ 0.16.0) chips *Alle / Für mich /
+  each person* sort the shared library by the tag `für NAME`; books without a person tag are for everybody. The choice is remembered per browser.
 - **Reader** — full-screen EPUB reader (epub.js): tap or swipe to turn pages, font size, light/sepia/dark,
   reading position synced to Audiobookshelf (continue on any device). A **chapter list** (button in the top bar, shown when the book has a table of contents) jumps straight to any chapter and highlights the current one.
 - **Player** — full-screen audiobook player: ±30 s, speed, chapter list, resume position, progress synced to

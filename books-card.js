@@ -16,7 +16,7 @@
 // Constants
 // ─────────────────────────────────────────────────────────────────────────
 
-const CARD_VERSION = "0.5.1";
+const CARD_VERSION = "0.6.0";
 const CARD_TAG = "books-card";
 const EDITOR_TAG = "books-card-editor";
 
@@ -54,6 +54,24 @@ const READER_THEMES = {
 // ─────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────
+
+const PERSON_KEY = "bc-person"; // the chosen person chip (browser only; the card works without storage)
+
+function storedGet(key) {
+  try {
+    return window.localStorage.getItem(key);
+  } catch (_) {
+    return null;
+  }
+}
+
+function storedSet(key, value) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch (_) {
+    /* private window or blocked storage: the choice just is not remembered */
+  }
+}
 
 function esc(value) {
   return String(value ?? "")
@@ -484,6 +502,8 @@ class BooksCard extends HTMLElement {
     this._libraryFilter = "";
     this._inProgress = [];
     this._progress = {}; // libraryItemId -> mediaProgress
+    this._people = []; // [{name, tag, me}] from /api/books/people; chips per person show when there are two or more
+    this._personFilter = storedGet(PERSON_KEY) || "all"; // all | mine | <tag of one person>
     this._detailItemId = null;
     this._detail = null;
     this._tolino = null; // bridge status from /api/books/tolino, refreshed when a detail sheet opens
@@ -611,6 +631,7 @@ class BooksCard extends HTMLElement {
     if (this._initialLoaded) return;
     this._initialLoaded = true;
     this._loadLibraries();
+    this._loadPeople();
     this._loadDownloads();
     this._startPolling();
   }
@@ -936,6 +957,48 @@ class BooksCard extends HTMLElement {
     }
   }
 
+  async _loadPeople() {
+    try {
+      this._people = (await this._api("GET", "books/people")).people || [];
+    } catch (_) {
+      this._people = []; // older integration without the endpoint → no person chips
+    }
+    this._render();
+  }
+
+  // One library for everybody; a book "für Anna" carries that tag. Books without any person tag (the old stock) are for everybody.
+  _personTags() {
+    return new Set(this._people.map((p) => p.tag));
+  }
+
+  _byPerson(items) {
+    if (this._people.length < 2) return items;
+    const all = this._personTags();
+    const mine = this._people.find((p) => p.me)?.tag;
+    const f = this._personFilter;
+    const tagsOf = (i) => (i.media?.tags || []).filter((t) => all.has(t));
+    if (f === "mine") return items.filter((i) => !tagsOf(i).length || tagsOf(i).includes(mine));
+    if (all.has(f)) return items.filter((i) => tagsOf(i).includes(f));
+    return items;
+  }
+
+  _personChips() {
+    if (this._people.length < 2) return "";
+    const f = this._personFilter === "mine" || this._personTags().has(this._personFilter) ? this._personFilter : "all";
+    const chip = (id, label) =>
+      `<button class="bc-chip ${f === id ? "active" : ""}" data-action="selectPerson" data-id="${esc(id)}">${esc(label)}</button>`;
+    return `<div class="bc-chips bc-people">${chip("all", "Alle")}${chip("mine", "Für mich")}${this._people
+      .filter((p) => !p.me)
+      .map((p) => chip(p.tag, p.name))
+      .join("")}</div>`;
+  }
+
+  _onAction_selectPerson(el) {
+    this._personFilter = el.dataset.id;
+    storedSet(PERSON_KEY, this._personFilter);
+    this._render();
+  }
+
   _sortLibraries(libraries) {
     const order = String(this._config.library_order || "")
       .split(",")
@@ -1008,7 +1071,7 @@ class BooksCard extends HTMLElement {
       )
       .join("")}</div>`;
 
-    const continueItems = this._inProgress.filter((i) => i.libraryId === this._libraryId);
+    const continueItems = this._byPerson(this._inProgress.filter((i) => i.libraryId === this._libraryId));
     const continueHtml = continueItems.length
       ? `<div class="bc-section-title">Weiter</div>
          <div class="bc-row-scroll">${continueItems.map((i) => this._renderTile(i)).join("")}</div>`
@@ -1019,22 +1082,23 @@ class BooksCard extends HTMLElement {
     if (this._libraryLoading || !items) body = `<div class="bc-loading">Lade…</div>`;
     else {
       const f = this._libraryFilter.trim().toLowerCase();
+      const people = this._byPerson(items);
       const shown = f
-        ? items.filter((i) => {
+        ? people.filter((i) => {
             const m = i.media.metadata;
             return [m.title, m.authorName, m.seriesName, m.narratorName].some((v) => (v || "").toLowerCase().includes(f));
           })
-        : items;
+        : people;
       body = shown.length
         ? `<div class="bc-grid">${shown.map((i) => this._renderTile(i)).join("")}</div>`
         : `<div class="bc-empty">${f ? "Nichts gefunden." : "Hier ist noch nichts.<br>Neue Bücher findest du unter „Suchen“."}</div>`;
     }
 
-    return `${chips}
+    return `${chips}${this._personChips()}
       <div class="bc-searchbar"><input type="search" placeholder="In der Bibliothek suchen" value="${esc(this._libraryFilter)}"
         data-input="libraryFilter" data-focus-id="libfilter" autocomplete="off"></div>
       ${continueHtml}
-      <div class="bc-section-title">${items ? `${items.length} Titel` : ""}</div>
+      <div class="bc-section-title">${items ? `${this._byPerson(items).length} Titel` : ""}</div>
       ${body}`;
   }
 
